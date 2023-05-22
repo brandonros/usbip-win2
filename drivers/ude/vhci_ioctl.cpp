@@ -307,11 +307,8 @@ PAGED auto start_device(_Out_ int &port, _In_ UDECXUSBDEVICE device)
                 return err;
         }
 
-        if (auto dev = get_device_ctx(device)) {
-                sched_receive_usbip_header(*dev);
-        }
-
-        return USBIP_ERROR_SUCCESS;
+        auto st = device::recv_thread_start(device);
+        return as_usbip_status(st);
 }
 
 _IRQL_requires_same_

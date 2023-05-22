@@ -76,7 +76,26 @@ PAGED void device_cleanup(_In_ WDFOBJECT Object)
                 NT_ASSERT(dev->unplugged);
                 NT_ASSERT(!dev->sock());
                 NT_ASSERT(!dev->port);
+                NT_ASSERT(!dev->recv_thread);
         }
+}
+
+_IRQL_requires_same_
+_IRQL_requires_(PASSIVE_LEVEL)
+PAGED void recv_thread_join(_In_ UDECXUSBDEVICE device)
+{
+        PAGED_CODE();
+
+        TraceDbg("dev %04x", ptr04x(device));
+        auto &dev = *get_device_ctx(device);
+
+        auto thread = (_KTHREAD*)InterlockedExchangePointer(reinterpret_cast<PVOID*>(&dev.recv_thread), nullptr);
+        NT_ASSERT(thread);
+
+        NT_VERIFY(!KeWaitForSingleObject(thread, Executive, KernelMode, false, nullptr));
+        TraceDbg("dev %04x, joined", ptr04x(device));
+
+        ObDereferenceObject(thread);
 }
 
 /*
@@ -538,10 +557,6 @@ PAGED auto init_device(_In_ UDECXUSBDEVICE device, _Inout_ device_ctx &dev)
                 return err;
         }
 
-        if (auto err = init_receive_usbip_header(dev)) {
-                return err;
-        }
-
         if (auto err = device::create_queue(device)) {
                 return err;
         }
@@ -588,6 +603,9 @@ PAGED void detach(_In_ UDECXUSBDEVICE device, _In_ bool plugout_and_delete)
         if (auto port = vhci::reclaim_roothub_port(device)) {
                 Trace(TRACE_LEVEL_INFORMATION, "port %d released", port);
         }
+
+        recv_thread_join(device);
+        NT_ASSERT(WDF_IO_QUEUE_PURGED(WdfIoQueueGetState(dev.queue, nullptr, nullptr)));
 
         if (!plugout_and_delete) {
                 //
@@ -776,3 +794,28 @@ PAGED void usbip::device::detach(_In_ UDECXUSBDEVICE device, _In_ bool plugout_a
 
         NT_VERIFY(NT_SUCCESS(wait_detach(device))); // concurrent calls wait for the completion
 }
+
+_IRQL_requires_same_
+_IRQL_requires_(PASSIVE_LEVEL)
+PAGED NTSTATUS usbip::device::recv_thread_start(_In_ UDECXUSBDEVICE device)
+{
+        PAGED_CODE();
+        const auto access = THREAD_ALL_ACCESS;
+
+        HANDLE handle{};
+        if (auto err = PsCreateSystemThread(&handle, access, nullptr, nullptr, nullptr, recv_thread_function, device)) {
+                Trace(TRACE_LEVEL_ERROR, "PsCreateSystemThread %!STATUS!", err);
+                return err;
+        }
+
+        auto dev = get_device_ctx(device);
+
+        NT_VERIFY(NT_SUCCESS(ObReferenceObjectByHandle(handle, access, *PsThreadType, KernelMode, 
+                             reinterpret_cast<PVOID*>(&dev->recv_thread), nullptr)));
+
+        NT_VERIFY(NT_SUCCESS(ZwClose(handle)));
+
+        TraceDbg("dev %04x", ptr04x(device));
+        return STATUS_SUCCESS;
+}
+

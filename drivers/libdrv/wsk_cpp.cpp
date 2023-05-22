@@ -25,11 +25,11 @@ LONG g_init_flags;
 class ConcurrencyCheck
 {
 public:
-        ConcurrencyCheck(_In_opt_ LONG64 *cnt) : m_cnt(cnt) {}
+        ConcurrencyCheck(_Inout_ LONG64 &cnt) : m_cnt(&cnt) {}
 
         ~ConcurrencyCheck()
         {
-                NT_ASSERT(!m_cnt || InterlockedIncrement64(m_cnt) == m_val + 1); // there were no concurrent calls
+                NT_ASSERT(InterlockedIncrement64(m_cnt) == m_val + 1); // there were no concurrent calls
         }
 
         ConcurrencyCheck(const ConcurrencyCheck&) = delete;
@@ -37,7 +37,7 @@ public:
 
 private:
         LONG64 *m_cnt{};
-        LONG64 m_val = m_cnt ? InterlockedIncrement64(m_cnt) : 0;
+        LONG64 m_val = InterlockedIncrement64(m_cnt);
 };
 
 #else
@@ -45,7 +45,7 @@ private:
 class ConcurrencyCheck
 {
 public:
-        ConcurrencyCheck(_In_opt_ LONG64*) {}
+        ConcurrencyCheck(_Inout_ LONG64&) {}
 };
 
 #endif // if DBG
@@ -242,7 +242,7 @@ struct wsk::SOCKET
         KEVENT can_close;
 
         template<typename F, typename... Args>
-        auto invoke(count_t *cnt, F &&f, Args&&... args) 
+        auto invoke(count_t &cnt, F &&f, Args&&... args) 
         {
                 NTSTATUS ret;
 
@@ -352,7 +352,7 @@ PAGED auto transfer(_In_ SOCKET *sock, _In_ WSK_BUF *buffer, _In_ ULONG flags, _
 
         irp->reset();
 
-        auto st = sock->invoke(cnt, func, sock->Self, buffer, flags, irp->get());
+        auto st = sock->invoke(*cnt, func, sock->Self, buffer, flags, irp->get());
         irp->wait_for_completion(st);
 
         actual = NT_SUCCESS(st) ? (*irp)->IoStatus.Information : 0;
@@ -383,19 +383,14 @@ _IRQL_requires_max_(DISPATCH_LEVEL)
 NTSTATUS wsk::send(_In_ SOCKET *sock, _In_ WSK_BUF *buffer, _In_ ULONG flags, _In_ IRP *irp)
 {
         NT_ASSERT(sock);
-        return sock->invoke(&sock->sent_cnt, sock->Connection->WskSend, sock->Self, buffer, flags, irp);
+        return sock->invoke(sock->sent_cnt, sock->Connection->WskSend, sock->Self, buffer, flags, irp);
 }
 
-/*
- * FIXME: 
- * recv_cnt is commented out because WSK thread has high priority and completion handler is called
- * before WSK function returns control.
- */
 _IRQL_requires_max_(DISPATCH_LEVEL)
 NTSTATUS wsk::receive(_In_ SOCKET *sock, _In_ WSK_BUF *buffer, _In_ ULONG flags, _In_ IRP *irp)
 {
         NT_ASSERT(sock);
-        return sock->invoke(nullptr /*&sock->recv_cnt*/, sock->Connection->WskReceive, sock->Self, buffer, flags, irp);
+        return sock->invoke(sock->recv_cnt, sock->Connection->WskReceive, sock->Self, buffer, flags, irp);
 }
 
 _IRQL_requires_max_(APC_LEVEL)
@@ -590,7 +585,7 @@ PAGED NTSTATUS wsk::control(
                 irp.reset();
         }
 
-        auto st = sock->invoke(&sock->misc_cnt,
+        auto st = sock->invoke(sock->misc_cnt,
                                 sock->Basic->WskControlSocket, 
                                 sock->Self, RequestType, ControlCode, Level,
                                 InputSize, InputBuffer,
@@ -657,7 +652,7 @@ PAGED NTSTATUS wsk::bind(_In_ SOCKET *sock, _In_ SOCKADDR *LocalAddress)
         auto &irp = sock->misc_irp;
         irp.reset();
 
-        auto st = sock->invoke(&sock->misc_cnt, sock->Connection->WskBind, sock->Self, LocalAddress, 0, irp.get());
+        auto st = sock->invoke(sock->misc_cnt, sock->Connection->WskBind, sock->Self, LocalAddress, 0, irp.get());
         return irp.wait_for_completion(st);
 }
 
@@ -669,7 +664,7 @@ PAGED NTSTATUS wsk::connect(_In_ SOCKET *sock, _In_ SOCKADDR *RemoteAddress)
         auto &irp = sock->misc_irp;
         irp.reset();
 
-        auto st = sock->invoke(&sock->misc_cnt, sock->Connection->WskConnect, sock->Self, RemoteAddress, 0, irp.get());
+        auto st = sock->invoke(sock->misc_cnt, sock->Connection->WskConnect, sock->Self, RemoteAddress, 0, irp.get());
         return irp.wait_for_completion(st);
 }
 
@@ -681,14 +676,14 @@ PAGED NTSTATUS wsk::disconnect(_In_ SOCKET *sock, _In_opt_ WSK_BUF *buffer, _In_
         auto &irp = sock->misc_irp;
         irp.reset();
 
-        auto st = sock->invoke(&sock->misc_cnt, sock->Connection->WskDisconnect, sock->Self, buffer, flags, irp.get());
+        auto st = sock->invoke(sock->misc_cnt, sock->Connection->WskDisconnect, sock->Self, buffer, flags, irp.get());
         return irp.wait_for_completion(st);
 }
 
 _IRQL_requires_max_(DISPATCH_LEVEL)
 NTSTATUS wsk::release(_In_ SOCKET *sock, _In_ WSK_DATA_INDICATION *DataIndication)
 {
-        return sock->invoke(&sock->misc_cnt, sock->Connection->WskRelease, sock->Self, DataIndication);
+        return sock->invoke(sock->misc_cnt, sock->Connection->WskRelease, sock->Self, DataIndication);
 }
 
 _IRQL_requires_max_(APC_LEVEL)
@@ -699,7 +694,7 @@ PAGED NTSTATUS wsk::getlocaladdr(_In_ SOCKET *sock, _Out_ SOCKADDR *LocalAddress
         auto &irp = sock->misc_irp;
         irp.reset();
 
-        auto st = sock->invoke(&sock->misc_cnt, sock->Connection->WskGetLocalAddress, sock->Self, LocalAddress, irp.get());
+        auto st = sock->invoke(sock->misc_cnt, sock->Connection->WskGetLocalAddress, sock->Self, LocalAddress, irp.get());
         return irp.wait_for_completion(st);
 }
 
@@ -711,7 +706,7 @@ PAGED NTSTATUS wsk::getremoteaddr(_In_ SOCKET *sock, _Out_ SOCKADDR *RemoteAddre
         auto &irp = sock->misc_irp;
         irp.reset();
 
-        auto st = sock->invoke(&sock->misc_cnt, sock->Connection->WskGetRemoteAddress, sock->Self, RemoteAddress, irp.get());
+        auto st = sock->invoke(sock->misc_cnt, sock->Connection->WskGetRemoteAddress, sock->Self, RemoteAddress, irp.get());
         return irp.wait_for_completion(st);
 }
 

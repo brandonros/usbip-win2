@@ -462,7 +462,7 @@ void usbip::device::send_cmd_unlink_and_cancel(_In_ UDECXUSBDEVICE device, _In_ 
         TraceDbg("dev %04x, seqnum %u", ptr04x(device), req.seqnum);
 
         if (dev.unplugged) {
-                TraceDbg("Unplugged, do not send unlink command");
+                TraceDbg("dev %04x, unplugged, do not send unlink", ptr04x(device));
         } else if (auto ctx = wsk_context_ptr(&dev, WDFREQUEST(WDF_NO_HANDLE))) {
                 set_cmd_unlink_usbip_header(ctx->hdr, dev, req.seqnum);
                 ::send(WDF_NO_HANDLE, ctx, dev, false); // ignore error
